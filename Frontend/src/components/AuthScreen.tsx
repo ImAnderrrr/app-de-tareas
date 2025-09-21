@@ -5,6 +5,60 @@ import { TaskButton } from './TaskButton';
 import { AuthTabs, AuthTabsList, AuthTabsTrigger, AuthTabsContent } from './AuthTabs';
 import { ImageCarousel } from './ImageCarousel';
 import { CheckCircle, Eye, EyeOff } from 'lucide-react';
+import { storeAccessToken } from '../lib/auth';
+
+const API_BASE_URL = (() => {
+  const base = import.meta.env.VITE_API_URL as string | undefined;
+  if (!base) return 'http://localhost:3000';
+  return base.endsWith('/') ? base.slice(0, -1) : base;
+})();
+
+class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+async function postJson<T>(endpoint: string, body: unknown): Promise<T> {
+  const url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+  } catch {
+    throw new ApiError(0, 'No se pudo conectar con el servidor. Intenta nuevamente.');
+  }
+
+  let data: unknown = null;
+  if (response.status !== 204) {
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+  }
+
+  if (!response.ok) {
+    const message = (data as { message?: unknown } | null)?.message;
+    const errorMessage = Array.isArray(message)
+      ? message.join(', ')
+      : typeof message === 'string'
+        ? message
+        : 'Ocurrió un error. Intenta nuevamente.';
+
+    throw new ApiError(response.status, errorMessage);
+  }
+
+  return data as T;
+}
 
 interface FormData {
   email: string;
@@ -33,6 +87,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [generalError, setGeneralError] = useState<string | null>(null);
 
   // Carousel slides for the right panel
   const carouselSlides = [
@@ -68,6 +123,9 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
     // Clear error when user starts typing
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: undefined }));
+    }
+    if (generalError) {
+      setGeneralError(null);
     }
   };
 
@@ -107,22 +165,55 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
     if (!validateForm()) return;
 
     setLoading(true);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    setLoading(false);
+    setGeneralError(null);
 
-    // Handle success - navigate to tasks
-    if (onLogin) {
-      onLogin({
-        email: formData.email,
-        name: formData.email.split('@')[0] // Use email prefix as name
+    const normalizedEmail = formData.email.trim().toLowerCase();
+    const password = formData.password;
+
+    try {
+      if (activeTab === 'register') {
+        await postJson<{ id: number; email: string }>('/auth/register', {
+          email: normalizedEmail,
+          password
+        });
+      }
+
+      const { access_token } = await postJson<{ access_token: string }>('/auth/login', {
+        email: normalizedEmail,
+        password
       });
+
+      storeAccessToken(access_token);
+
+      if (onLogin) {
+        onLogin({
+          email: normalizedEmail,
+          name: normalizedEmail.split('@')[0]
+        });
+      }
+    } catch (error) {
+      if (error instanceof ApiError) {
+        if (error.status === 409) {
+          setErrors({ email: 'Este email ya está registrado' });
+        } else if (error.status === 401) {
+          setErrors({ password: 'Credenciales inválidas' });
+        } else if (error.status === 0) {
+          setGeneralError(error.message);
+        } else {
+          setGeneralError(error.message || 'Ocurrió un error. Intenta nuevamente.');
+        }
+      } else {
+        setGeneralError('Ocurrió un error inesperado. Intenta nuevamente.');
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
   const resetForm = () => {
     setFormData({ email: '', password: '', confirmPassword: '' });
     setErrors({});
+    setGeneralError(null);
   };
 
   const handleTabChange = (tab: string) => {
@@ -310,6 +401,12 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
               >
                 {activeTab === 'login' ? 'Iniciar sesión' : 'Crear cuenta'}
               </TaskButton>
+
+              {generalError && (
+                <p className="text-sm text-red-600 text-center">
+                  {generalError}
+                </p>
+              )}
             </form>
 
             {/* Footer */}
