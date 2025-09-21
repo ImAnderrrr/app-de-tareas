@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AuthScreen } from './AuthScreen';
 import { SimpleTasksView } from './SimpleTasksView';
+import { clearAccessToken } from '../lib/auth';
 
 type AppView = 'auth' | 'tasks';
 
@@ -20,6 +21,7 @@ export function TaskFlowApp() {
   };
 
   const handleLogout = () => {
+    clearAccessToken();
     setUser(null);
     setCurrentView('auth');
   };
